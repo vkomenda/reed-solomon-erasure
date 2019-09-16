@@ -239,13 +239,13 @@ pub struct ReedSolomon {
 
 /// Parameters for parallelism.
 #[derive(PartialEq, Debug, Clone, Copy)]
-pub struct ParallelParam {
+pub enum ParallelParam {
     /// Number of bytes to split the slices into for computations
     /// which can be done in parallel.
     ///
     /// Default is 32768.
-    pub bytes_per_encode  : usize,
-    //pub shards_per_encode : usize,
+    Enabled(usize),
+    Disabled,
 }
 
 /// Bookkeeper for shard by shard encoding.
@@ -307,16 +307,19 @@ pub struct ShardByShard<'a> {
     cur_input : usize,
 }
 
+const PPARAM_DEFAULT : usize = 32768;
+
 impl ParallelParam {
     pub fn new(bytes_per_encode  : usize,
                /*shards_per_encode : usize*/) -> ParallelParam {
-        ParallelParam { bytes_per_encode,
-                        /*shards_per_encode*/ }
+        ParallelParam::Enabled(bytes_per_encode)
+    }
+    pub fn new_disabled() -> ParallelParam {
+        ParallelParam::Disabled
     }
 
     pub fn with_default() -> ParallelParam {
-        Self::new(32768,
-                  /*4*/)
+        ParallelParam::Enabled(PPARAM_DEFAULT)
     }
 }
 
@@ -668,8 +671,8 @@ impl ReedSolomon {
 
         let matrix       = Self::build_matrix(data_shards, total_shards);
 
-        if pparam.bytes_per_encode == 0 {
-            pparam.bytes_per_encode = 1;
+        if pparam == ParallelParam::Enabled(0) {
+            pparam = ParallelParam::Enabled(1);
         }
 
         Ok(ReedSolomon {
@@ -706,11 +709,43 @@ impl ReedSolomon {
         }
     }
 
-    fn code_single_slice(&self,
-                         matrix_rows : &[&[u8]],
-                         i_input     : usize,
-                         input       : &[u8],
-                         outputs     : &mut [&mut [u8]]) {
+
+    fn code_single_slice(
+        &self,
+        matrix_rows: &[&[u8]],
+        i_input: usize,
+        input: &[u8],
+        outputs: &mut [&mut [u8]],
+    ) {
+        match self.pparam {
+            ParallelParam::Enabled(bytes_per_encode) => self.code_single_slice_parallel(
+                matrix_rows,
+                i_input,
+                input,
+                outputs,
+                bytes_per_encode,
+            ),
+            ParallelParam::Disabled => {
+                outputs.into_iter().enumerate().for_each(|(i_row, output)| {
+                    let matrix_row_to_use = matrix_rows[i_row][i_input];
+                    if i_input == 0 {
+                        galois::mul_slice(matrix_row_to_use, input, output);
+                    } else {
+                        galois::mul_slice_xor(matrix_row_to_use, input, output);
+                    }
+                })
+            }
+        }
+    }
+
+    fn code_single_slice_parallel(
+        &self,
+        matrix_rows      : &[&[u8]],
+        i_input          : usize,
+        input            : &[u8],
+        outputs          : &mut [&mut [u8]],
+        bytes_per_encode : usize) {
+
         outputs
             .into_par_iter()
             .enumerate()
@@ -718,34 +753,34 @@ impl ReedSolomon {
                 let matrix_row_to_use = matrix_rows[i_row][i_input];
 
                 if i_input == 0 {
-                    if output.len() <= self.pparam.bytes_per_encode {
+                    if output.len() <= bytes_per_encode {
                         galois::mul_slice(matrix_row_to_use,
                                           input,
                                           output);
                     } else {
-                        output.par_chunks_mut(self.pparam.bytes_per_encode)
+                        output.par_chunks_mut(bytes_per_encode)
                             .into_par_iter()
                             .enumerate()
                             .for_each(|(i, output)| {
                                 let start =
-                                    i * self.pparam.bytes_per_encode;
+                                    i * bytes_per_encode;
                                 galois::mul_slice(matrix_row_to_use,
                                                   &input[start..start + output.len()],
                                                   output);
                             })
                     }
                 } else {
-                    if output.len() <= self.pparam.bytes_per_encode {
+                    if output.len() <= bytes_per_encode {
                         galois::mul_slice_xor(matrix_row_to_use,
                                               input,
                                               output);
                     } else {
-                        output.par_chunks_mut(self.pparam.bytes_per_encode)
+                        output.par_chunks_mut(bytes_per_encode)
                             .into_par_iter()
                             .enumerate()
                             .for_each(|(i, output)| {
                                 let start =
-                                    i * self.pparam.bytes_per_encode;
+                                    i * bytes_per_encode;
                                 galois::mul_slice_xor(matrix_row_to_use,
                                                       &input[start..start + output.len()],
                                                       output);
@@ -771,6 +806,12 @@ impl ReedSolomon {
         // as the following code
         //
         // The logic is detailed in the AUDIT notes in that function
+        let bytes_per_encode = {
+            match self.pparam {
+                ParallelParam::Enabled(bytes_per_encode) => bytes_per_encode,
+                ParallelParam::Disabled => PPARAM_DEFAULT,
+            }
+        };
 
         let at_least_one_mismatch_present =
             buffer
@@ -779,7 +820,7 @@ impl ReedSolomon {
             .map(|(i, expected_parity_shard)| {
                 misc_utils::par_slices_are_equal(expected_parity_shard,
                                                  to_check[i],
-                                                 self.pparam.bytes_per_encode)
+                                                 bytes_per_encode)
             })
             .any(|x| !x);  // find the first false(some slice is different from the expected one)
         !at_least_one_mismatch_present
