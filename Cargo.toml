@@ -1,7 +1,7 @@
 [package]
-name    = "reed-solomon-erasure"
+name    = "solana-reed-solomon-erasure"
 version = "3.1.1"
-authors = ["Darren Ldl <darrenldldev@gmail.com>"]
+authors = ["Darren Ldl <darrenldldev@gmail.com>", "Solana Maintainers <maintainers@solana.com>"]
 build   = "build.rs"
 exclude = [
     "BackBlaze_JavaReedSolomon/*",
@@ -14,8 +14,8 @@ exclude = [
 description   = "Rust implementation of Reed-Solomon erasure coding"
 
 documentation = "https://docs.rs/reed-solomon-erasure"
-homepage      = "https://github.com/darrenldl/reed-solomon-erasure"
-repository    = "https://github.com/darrenldl/reed-solomon-erasure"
+homepage      = "https://github.com/solana-labs/reed-solomon-erasure"
+repository    = "https://github.com/solana-labs/reed-solomon-erasure"
 
 readme        = "README.md"
 
