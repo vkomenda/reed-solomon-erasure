@@ -153,10 +153,7 @@ fn write_tables() {
 
 #[cfg(all(
     feature = "simd-accel",
-    any(
-        all(host_arch = "x86_64", target_arch = "x86_64"),
-        all(host_arch = "aarch64", target_arch = "aarch64")
-    ),
+    any(target_arch = "x86_64", target_arch = "aarch64"),
     not(target_env = "msvc"),
     not(any(target_os = "android", target_os = "ios"))
 ))]
@@ -164,21 +161,6 @@ fn compile_simd_c() {
     cc::Build::new()
         .opt_level(3)
         .flag("-march=native")
-        .flag("-std=c11")
-        .file("simd_c/reedsolomon.c")
-        .compile("reedsolomon");
-}
-
-#[cfg(all(
-    feature = "simd-accel",
-    any(
-        all(not(host_arch = "x86_64"), target_arch = "x86_64"),
-        all(not(host_arch = "aarch64"), target_arch = "aarch64")
-    )
-))]
-fn compile_simd_c() {
-    cc::Build::new()
-        .opt_level(3)
         .flag("-std=c11")
         .file("simd_c/reedsolomon.c")
         .compile("reedsolomon");
