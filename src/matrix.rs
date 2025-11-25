@@ -82,7 +82,7 @@ impl<F: Field> Matrix<F> {
     #[cfg(test)]
     pub fn make_random(size: usize) -> Matrix<F>
     where
-        rand::distributions::Standard: rand::distributions::Distribution<F::Elem>,
+        rand::distr::StandardUniform: rand::distr::Distribution<F::Elem>,
     {
         let mut vec: Vec<Vec<F::Elem>> = vec![vec![Default::default(); size]; size];
         for v in vec.iter_mut() {
@@ -109,7 +109,7 @@ impl<F: Field> Matrix<F> {
     }
 
     pub fn get(&self, r: usize, c: usize) -> F::Elem {
-        acc!(self, r, c).clone()
+        acc!(self, r, c)
     }
 
     pub fn set(&mut self, r: usize, c: usize, val: F::Elem) {
@@ -128,7 +128,7 @@ impl<F: Field> Matrix<F> {
             for c in 0..rhs.col_count {
                 let mut val = F::zero();
                 for i in 0..self.col_count {
-                    let mul = F::mul(acc!(self, r, i).clone(), acc!(rhs, i, c).clone());
+                    let mul = F::mul(acc!(self, r, i), acc!(rhs, i, c));
 
                     val = F::add(val, mul);
                 }
@@ -148,7 +148,7 @@ impl<F: Field> Matrix<F> {
         let mut result = Self::new(self.row_count, self.col_count + rhs.col_count);
         for r in 0..self.row_count {
             for c in 0..self.col_count {
-                acc!(result, r, c) = acc!(self, r, c).clone();
+                acc!(result, r, c) = acc!(self, r, c);
             }
             let self_column_count = self.col_count;
             for c in 0..rhs.col_count {

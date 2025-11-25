@@ -107,11 +107,7 @@ impl Element {
     }
 
     fn degree(&self) -> usize {
-        if self.0[0] != 0 {
-            1
-        } else {
-            0
-        }
+        if self.0[0] != 0 { 1 } else { 0 }
     }
 }
 
@@ -318,12 +314,12 @@ impl Element {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use quickcheck::Arbitrary;
+    use quickcheck::{Arbitrary, Gen};
 
     impl Arbitrary for Element {
-        fn arbitrary<G: quickcheck::Gen>(gen: &mut G) -> Self {
-            let a = u8::arbitrary(gen);
-            let b = u8::arbitrary(gen);
+        fn arbitrary(g: &mut Gen) -> Self {
+            let a = u8::arbitrary(g);
+            let b = u8::arbitrary(g);
 
             Element([a, b])
         }
