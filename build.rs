@@ -7,38 +7,44 @@ use std::path::Path;
 extern crate cc;
 
 const FIELD_SIZE: usize = 256;
-
-const GENERATING_POLYNOMIAL: usize = 29;
-
-fn gen_log_table(polynomial: usize) -> [u8; FIELD_SIZE] {
-    let mut result: [u8; FIELD_SIZE] = [0; FIELD_SIZE];
-    let mut b: usize = 1;
-
-    for log in 0..FIELD_SIZE - 1 {
-        result[b] = log as u8;
-
-        b = b << 1;
-
-        if FIELD_SIZE <= b {
-            b = (b - FIELD_SIZE) ^ polynomial;
-        }
-    }
-
-    result
-}
-
 const EXP_TABLE_SIZE: usize = FIELD_SIZE * 2 - 2;
 
-fn gen_exp_table(log_table: &[u8; FIELD_SIZE]) -> [u8; EXP_TABLE_SIZE] {
-    let mut result: [u8; EXP_TABLE_SIZE] = [0; EXP_TABLE_SIZE];
+const GENERATING_POLYNOMIAL: u8 = 0x1d;
+const GENERATING_POLYNOMIAL_AES: u8 = 0x1b;
 
-    for i in 1..FIELD_SIZE {
-        let log = log_table[i] as usize;
-        result[log] = i as u8;
-        result[log + FIELD_SIZE - 1] = i as u8;
+fn gf_mul(mut a: u8, mut b: u8, polynomial: u8) -> u8 {
+    let mut r = 0u8;
+    while b != 0 {
+        if (b & 1) != 0 {
+            r ^= a;
+        }
+        let hi = a & 0x80;
+        a <<= 1;
+        if hi != 0 {
+            a ^= polynomial;
+        }
+        b >>= 1;
+    }
+    r
+}
+
+fn gen_log_exp_tables(polynomial: u8, prim_elem: u8) -> ([u8; FIELD_SIZE], [u8; EXP_TABLE_SIZE]) {
+    let mut log = [0u8; FIELD_SIZE];
+    let mut exp = [0u8; EXP_TABLE_SIZE];
+
+    let mut x: u8 = 1;
+    // build exp[0..254], log for non-zero
+    for (i, e) in exp.iter_mut().take(FIELD_SIZE - 1).enumerate() {
+        *e = x;
+        log[x as usize] = i as u8;
+        x = gf_mul(x, prim_elem, polynomial);
     }
 
-    result
+    // copy for overflow-friendly indexing
+    for i in 0..255 {
+        exp[255 + i] = exp[i];
+    }
+    (log, exp)
 }
 
 fn multiply(log_table: &[u8; FIELD_SIZE], exp_table: &[u8; EXP_TABLE_SIZE], a: u8, b: u8) -> u8 {
@@ -130,13 +136,12 @@ macro_rules! write_table {
     }};
 }
 
-fn write_tables() {
-    let log_table = gen_log_table(GENERATING_POLYNOMIAL);
-    let exp_table = gen_exp_table(&log_table);
+fn write_tables_gen(filename: &str, gen_poly: u8, prim_elem: u8) {
+    let (log_table, exp_table) = gen_log_exp_tables(gen_poly, prim_elem);
     let mul_table = gen_mul_table(&log_table, &exp_table);
 
     let out_dir = env::var("OUT_DIR").unwrap();
-    let dest_path = Path::new(&out_dir).join("table.rs");
+    let dest_path = Path::new(&out_dir).join(filename);
     let mut f = File::create(&dest_path).unwrap();
 
     write_table!(1D => f, log_table,      "LOG_TABLE",      "u8");
@@ -149,6 +154,11 @@ fn write_tables() {
         write_table!(2D => f, mul_table_low,  "MUL_TABLE_LOW",  "u8");
         write_table!(2D => f, mul_table_high, "MUL_TABLE_HIGH", "u8");
     }
+}
+
+fn write_tables() {
+    write_tables_gen("table.rs", GENERATING_POLYNOMIAL, 2);
+    write_tables_gen("table-aes.rs", GENERATING_POLYNOMIAL_AES, 3);
 }
 
 #[cfg(all(
@@ -169,9 +179,11 @@ fn compile_simd_c() {
         Err(_error) => {
             // On x86-64 enabling Haswell architecture unlocks useful instructions and improves performance
             // dramatically while allowing it to run ony modern CPU.
-            match env::var("CARGO_CFG_TARGET_ARCH").unwrap().as_str(){
-                "x86_64"  => { build.flag(&"-march=haswell"); },
-                _         => ()
+            match env::var("CARGO_CFG_TARGET_ARCH").unwrap().as_str() {
+                "x86_64" => {
+                    build.flag(&"-march=haswell");
+                }
+                _ => (),
             }
         }
     }
