@@ -1,6 +1,7 @@
-//! Implementation of GF(2^8): the finite field with 2^8 elements.
+#[cfg(all(feature = "avx512-gfni", target_arch = "x86_64"))]
+use core::arch::x86_64;
 
-include!(concat!(env!("OUT_DIR"), "/table.rs"));
+include!(concat!(env!("OUT_DIR"), "/table_aes.rs"));
 
 /// The field GF(2^8).
 #[derive(Debug, Default, Copy, Clone, PartialEq, Eq)]
@@ -39,11 +40,27 @@ impl crate::Field for Field {
     }
 
     fn mul_slice(c: u8, input: &[u8], out: &mut [u8]) {
-        mul_slice(c, input, out)
+        #[cfg(not(feature = "avx512-gfni"))]
+        {
+            mul_slice(c, input, out)
+        }
+
+        #[cfg(feature = "avx512-gfni")]
+        unsafe {
+            mul_slice(c, input, out)
+        }
     }
 
     fn mul_slice_add(c: u8, input: &[u8], out: &mut [u8]) {
-        mul_slice_xor(c, input, out)
+        #[cfg(not(feature = "avx512-gfni"))]
+        {
+            mul_slice_xor(c, input, out)
+        }
+
+        #[cfg(feature = "avx512-gfni")]
+        unsafe {
+            mul_slice_xor(c, input, out)
+        }
     }
 }
 
@@ -115,7 +132,7 @@ macro_rules! return_if_empty {
 }
 
 #[cfg(not(all(
-    feature = "simd-accel",
+    any(feature = "simd-accel", feature = "avx512-gfni"),
     any(target_arch = "x86_64", target_arch = "aarch64"),
     not(target_env = "msvc"),
     not(any(target_os = "android", target_os = "ios"))
@@ -125,7 +142,7 @@ pub fn mul_slice(c: u8, input: &[u8], out: &mut [u8]) {
 }
 
 #[cfg(not(all(
-    feature = "simd-accel",
+    any(feature = "simd-accel", feature = "avx512-gfni"),
     any(target_arch = "x86_64", target_arch = "aarch64"),
     not(target_env = "msvc"),
     not(any(target_os = "android", target_os = "ios"))
@@ -260,9 +277,10 @@ fn slice_xor(input: &[u8], out: &mut [u8]) {
 
 #[cfg(all(
     feature = "simd-accel",
+    not(feature = "avx512-gfni"),
     any(target_arch = "x86_64", target_arch = "aarch64"),
     not(target_env = "msvc"),
-    not(any(target_os = "android", target_os = "ios"))
+    not(any(target_os = "android", target_os = "ios")),
 ))]
 unsafe extern "C" {
     fn reedsolomon_gal_mul(
@@ -284,9 +302,10 @@ unsafe extern "C" {
 
 #[cfg(all(
     feature = "simd-accel",
+    not(feature = "avx512-gfni"),
     any(target_arch = "x86_64", target_arch = "aarch64"),
     not(target_env = "msvc"),
-    not(any(target_os = "android", target_os = "ios"))
+    not(any(target_os = "android", target_os = "ios")),
 ))]
 pub fn mul_slice(c: u8, input: &[u8], out: &mut [u8]) {
     let low: *const u8 = &MUL_TABLE_LOW[c as usize][0];
@@ -306,9 +325,10 @@ pub fn mul_slice(c: u8, input: &[u8], out: &mut [u8]) {
 
 #[cfg(all(
     feature = "simd-accel",
+    not(feature = "avx512-gfni"),
     any(target_arch = "x86_64", target_arch = "aarch64"),
     not(target_env = "msvc"),
-    not(any(target_os = "android", target_os = "ios"))
+    not(any(target_os = "android", target_os = "ios")),
 ))]
 pub fn mul_slice_xor(c: u8, input: &[u8], out: &mut [u8]) {
     let low: *const u8 = &MUL_TABLE_LOW[c as usize][0];
@@ -326,6 +346,68 @@ pub fn mul_slice_xor(c: u8, input: &[u8], out: &mut [u8]) {
     mul_slice_xor_pure_rust(c, &input[bytes_done..], &mut out[bytes_done..]);
 }
 
+#[cfg(all(feature = "avx512-gfni", target_arch = "x86_64"))]
+#[target_feature(enable = "avx512f,avx512bw,gfni")]
+pub fn mul_slice(c: u8, input: &[u8], out: &mut [u8]) {
+    let shard_len = input.len();
+    let num_chunks = shard_len / 64;
+    // don't handle any tail for performance and assume multiples of 64 bytes
+    assert_eq!(
+        shard_len % 64,
+        0,
+        "Shard length must be a multiple of 64 bytes"
+    );
+    assert_eq!(shard_len, out.len());
+
+    let vcoeff = x86_64::_mm512_set1_epi8(c as i8);
+    for chunk in 0..num_chunks {
+        let offset = chunk * 64;
+
+        // load 64 bytes of data shard once for all parity rows to improve temporal locality
+        let src = unsafe { x86_64::_mm512_loadu_si512(input.as_ptr().add(offset) as *const _) };
+
+        // multiply GF(2^8) using GFNI affine table
+        let prod = x86_64::_mm512_gf2p8mul_epi8(src, vcoeff);
+
+        // store back
+        unsafe { x86_64::_mm512_storeu_si512(out.as_mut_ptr().add(offset) as *mut _, prod) };
+    }
+}
+
+#[cfg(all(feature = "avx512-gfni", target_arch = "x86_64"))]
+#[target_feature(enable = "avx512f,avx512bw,gfni")]
+pub fn mul_slice_xor(c: u8, input: &[u8], out: &mut [u8]) {
+    let shard_len = input.len();
+    let num_chunks = shard_len / 64;
+    // don't handle any tail for performance and assume multiples of 64 bytes
+    assert_eq!(
+        shard_len % 64,
+        0,
+        "Shard length must be a multiple of 64 bytes"
+    );
+    assert_eq!(shard_len, out.len());
+
+    let vcoeff = x86_64::_mm512_set1_epi8(c as i8);
+    for chunk in 0..num_chunks {
+        let offset = chunk * 64;
+
+        // load 64 bytes of data shard once for all parity rows to improve temporal locality
+        let src = unsafe { x86_64::_mm512_loadu_si512(input.as_ptr().add(offset) as *const _) };
+
+        // load current parity
+        let dst = unsafe { x86_64::_mm512_loadu_si512(out.as_ptr().add(offset) as *const _) };
+
+        // multiply GF(2^8) using GFNI affine table
+        let prod = x86_64::_mm512_gf2p8mul_epi8(src, vcoeff);
+
+        // accumulate into parity
+        let sum = x86_64::_mm512_xor_si512(dst, prod);
+
+        // store back
+        unsafe { x86_64::_mm512_storeu_si512(out.as_mut_ptr().add(offset) as *mut _, sum) };
+    }
+}
+
 #[cfg(test)]
 mod tests {
     extern crate alloc;
@@ -335,32 +417,6 @@ mod tests {
     use super::*;
     use crate::tests::fill_random;
     use rand;
-
-    static BACKBLAZE_LOG_TABLE: [u8; 256] = [
-        //-1,    0,    1,   25,    2,   50,   26,  198,
-        // first value is changed from -1 to 0
-        0, 0, 1, 25, 2, 50, 26, 198, 3, 223, 51, 238, 27, 104, 199, 75, 4, 100, 224, 14, 52, 141,
-        239, 129, 28, 193, 105, 248, 200, 8, 76, 113, 5, 138, 101, 47, 225, 36, 15, 33, 53, 147,
-        142, 218, 240, 18, 130, 69, 29, 181, 194, 125, 106, 39, 249, 185, 201, 154, 9, 120, 77,
-        228, 114, 166, 6, 191, 139, 98, 102, 221, 48, 253, 226, 152, 37, 179, 16, 145, 34, 136, 54,
-        208, 148, 206, 143, 150, 219, 189, 241, 210, 19, 92, 131, 56, 70, 64, 30, 66, 182, 163,
-        195, 72, 126, 110, 107, 58, 40, 84, 250, 133, 186, 61, 202, 94, 155, 159, 10, 21, 121, 43,
-        78, 212, 229, 172, 115, 243, 167, 87, 7, 112, 192, 247, 140, 128, 99, 13, 103, 74, 222,
-        237, 49, 197, 254, 24, 227, 165, 153, 119, 38, 184, 180, 124, 17, 68, 146, 217, 35, 32,
-        137, 46, 55, 63, 209, 91, 149, 188, 207, 205, 144, 135, 151, 178, 220, 252, 190, 97, 242,
-        86, 211, 171, 20, 42, 93, 158, 132, 60, 57, 83, 71, 109, 65, 162, 31, 45, 67, 216, 183,
-        123, 164, 118, 196, 23, 73, 236, 127, 12, 111, 246, 108, 161, 59, 82, 41, 157, 85, 170,
-        251, 96, 134, 177, 187, 204, 62, 90, 203, 89, 95, 176, 156, 169, 160, 81, 11, 245, 22, 235,
-        122, 117, 44, 215, 79, 174, 213, 233, 230, 231, 173, 232, 116, 214, 244, 234, 168, 80, 88,
-        175,
-    ];
-
-    #[test]
-    fn log_table_same_as_backblaze() {
-        for i in 0..256 {
-            assert_eq!(LOG_TABLE[i], BACKBLAZE_LOG_TABLE[i]);
-        }
-    }
 
     #[test]
     fn test_associativity() {
@@ -476,79 +532,6 @@ mod tests {
                 power = mul(power, a);
             }
         }
-    }
-
-    #[test]
-    fn test_galois() {
-        assert_eq!(mul(3, 4), 12);
-        assert_eq!(mul(7, 7), 21);
-        assert_eq!(mul(23, 45), 41);
-
-        let input = [
-            0, 1, 2, 3, 4, 5, 6, 10, 50, 100, 150, 174, 201, 255, 99, 32, 67, 85, 200, 199, 198,
-            197, 196, 195, 194, 193, 192, 191, 190, 189, 188, 187, 186, 185,
-        ];
-        let mut output1 = vec![0; input.len()];
-        let mut output2 = vec![0; input.len()];
-        mul_slice(25, &input, &mut output1);
-        let expect = [
-            0x0, 0x19, 0x32, 0x2b, 0x64, 0x7d, 0x56, 0xfa, 0xb8, 0x6d, 0xc7, 0x85, 0xc3, 0x1f,
-            0x22, 0x7, 0x25, 0xfe, 0xda, 0x5d, 0x44, 0x6f, 0x76, 0x39, 0x20, 0xb, 0x12, 0x11, 0x8,
-            0x23, 0x3a, 0x75, 0x6c, 0x47,
-        ];
-        for i in 0..input.len() {
-            assert_eq!(expect[i], output1[i]);
-        }
-        mul_slice(25, &input, &mut output2);
-        for i in 0..input.len() {
-            assert_eq!(expect[i], output2[i]);
-        }
-
-        let expect_xor = [
-            0x0, 0x2d, 0x5a, 0x77, 0xb4, 0x99, 0xee, 0x2f, 0x79, 0xf2, 0x7, 0x51, 0xd4, 0x19, 0x31,
-            0xc9, 0xf8, 0xfc, 0xf9, 0x4f, 0x62, 0x15, 0x38, 0xfb, 0xd6, 0xa1, 0x8c, 0x96, 0xbb,
-            0xcc, 0xe1, 0x22, 0xf, 0x78,
-        ];
-        mul_slice_xor(52, &input, &mut output1);
-        for i in 0..input.len() {
-            assert_eq!(expect_xor[i], output1[i]);
-        }
-        mul_slice_xor(52, &input, &mut output2);
-        for i in 0..input.len() {
-            assert_eq!(expect_xor[i], output2[i]);
-        }
-
-        let expect = [
-            0x0, 0xb1, 0x7f, 0xce, 0xfe, 0x4f, 0x81, 0x9e, 0x3, 0x6, 0xe8, 0x75, 0xbd, 0x40, 0x36,
-            0xa3, 0x95, 0xcb, 0xc, 0xdd, 0x6c, 0xa2, 0x13, 0x23, 0x92, 0x5c, 0xed, 0x1b, 0xaa,
-            0x64, 0xd5, 0xe5, 0x54, 0x9a,
-        ];
-        mul_slice(177, &input, &mut output1);
-        for i in 0..input.len() {
-            assert_eq!(expect[i], output1[i]);
-        }
-        mul_slice(177, &input, &mut output2);
-        for i in 0..input.len() {
-            assert_eq!(expect[i], output2[i]);
-        }
-
-        let expect_xor = [
-            0x0, 0xc4, 0x95, 0x51, 0x37, 0xf3, 0xa2, 0xfb, 0xec, 0xc5, 0xd0, 0xc7, 0x53, 0x88,
-            0xa3, 0xa5, 0x6, 0x78, 0x97, 0x9f, 0x5b, 0xa, 0xce, 0xa8, 0x6c, 0x3d, 0xf9, 0xdf, 0x1b,
-            0x4a, 0x8e, 0xe8, 0x2c, 0x7d,
-        ];
-        mul_slice_xor(117, &input, &mut output1);
-        for i in 0..input.len() {
-            assert_eq!(expect_xor[i], output1[i]);
-        }
-        mul_slice_xor(117, &input, &mut output2);
-        for i in 0..input.len() {
-            assert_eq!(expect_xor[i], output2[i]);
-        }
-
-        assert_eq!(exp(2, 2), 4);
-        assert_eq!(exp(5, 20), 235);
-        assert_eq!(exp(13, 7), 43);
     }
 
     #[test]

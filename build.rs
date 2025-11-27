@@ -158,7 +158,7 @@ fn write_tables_gen(filename: &str, gen_poly: u8, prim_elem: u8) {
 
 fn write_tables() {
     write_tables_gen("table.rs", GENERATING_POLYNOMIAL, 2);
-    write_tables_gen("table-aes.rs", GENERATING_POLYNOMIAL_AES, 3);
+    write_tables_gen("table_aes.rs", GENERATING_POLYNOMIAL_AES, 3);
 }
 
 #[cfg(all(

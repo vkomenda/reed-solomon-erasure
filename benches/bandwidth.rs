@@ -6,6 +6,7 @@ use rand::distr::{Distribution, StandardUniform};
 use rand::rngs::SmallRng;
 use rand::{Fill, SeedableRng};
 use reed_solomon_erasure::galois_8::ReedSolomon;
+use reed_solomon_erasure::galois_8_aes::ReedSolomon as ReedSolomonAes;
 use std::hint::black_box;
 
 type Shards = Vec<Vec<u8>>;
@@ -58,6 +59,29 @@ fn rs_encode_benchmark(
     });
 }
 
+fn rs_aes_encode_benchmark(
+    group: &mut BenchmarkGroup<WallTime>,
+    block_size: usize,
+    data_shards: usize,
+    parity_shards: usize,
+) {
+    let size = block_size * data_shards;
+
+    group.throughput(criterion::Throughput::Bytes(size.try_into().unwrap()));
+
+    group.bench_function(format!("{}+{}", data_shards, parity_shards), |b| {
+        let mut shards = create_shards(block_size, data_shards, parity_shards);
+        let rs = ReedSolomonAes::new(data_shards, parity_shards).unwrap();
+
+        assert_eq!(shards.len(), data_shards + parity_shards);
+        assert_eq!(shards.last().unwrap().len(), block_size);
+
+        b.iter(|| {
+            rs.encode(black_box(&mut shards)).unwrap();
+        });
+    });
+}
+
 fn rs_reconstruct_benchmark(
     group: &mut BenchmarkGroup<WallTime>,
     block_size: usize,
@@ -72,6 +96,36 @@ fn rs_reconstruct_benchmark(
     group.bench_function(format!("{}+{}", data_shards, parity_shards), |b| {
         let mut shards = create_shards(block_size, data_shards, parity_shards);
         let rs = ReedSolomon::new(data_shards, parity_shards).unwrap();
+
+        assert_eq!(shards.len(), data_shards + parity_shards);
+        assert_eq!(shards.last().unwrap().len(), block_size);
+
+        // Construct the parity shards
+        rs.encode(&mut shards).unwrap();
+
+        let mut calculated: Vec<Option<Vec<u8>>> = shards.into_iter().map(Some).collect();
+
+        b.iter(|| {
+            (0..delete).for_each(|i| calculated[i] = None);
+            rs.reconstruct(black_box(&mut calculated)).unwrap();
+        });
+    });
+}
+
+fn rs_aes_reconstruct_benchmark(
+    group: &mut BenchmarkGroup<WallTime>,
+    block_size: usize,
+    data_shards: usize,
+    parity_shards: usize,
+    delete: usize,
+) {
+    let size = block_size * data_shards;
+
+    group.throughput(criterion::Throughput::Bytes(size.try_into().unwrap()));
+
+    group.bench_function(format!("{}+{}", data_shards, parity_shards), |b| {
+        let mut shards = create_shards(block_size, data_shards, parity_shards);
+        let rs = ReedSolomonAes::new(data_shards, parity_shards).unwrap();
 
         assert_eq!(shards.len(), data_shards + parity_shards);
         assert_eq!(shards.last().unwrap().len(), block_size);
@@ -118,6 +172,36 @@ fn encode(c: &mut Criterion) {
     }
 }
 
+fn encode_aes(c: &mut Criterion) {
+    {
+        let mut group = c.benchmark_group("Galos 8 AES [1KiB] Encode");
+        rs_aes_encode_benchmark(&mut group, 1024, 4, 4);
+        rs_aes_encode_benchmark(&mut group, 1024, 8, 8);
+        rs_aes_encode_benchmark(&mut group, 1024, 16, 16);
+        rs_aes_encode_benchmark(&mut group, 1024, 32, 32);
+        rs_aes_encode_benchmark(&mut group, 1024, 64, 64);
+        rs_aes_encode_benchmark(&mut group, 1024, 5, 2);
+        rs_aes_encode_benchmark(&mut group, 1024, 10, 4);
+        rs_aes_encode_benchmark(&mut group, 1024, 50, 20);
+    }
+    {
+        let mut group = c.benchmark_group("Galos 8 AES [2KiB] Encode");
+        rs_aes_encode_benchmark(&mut group, 2048, 4, 4);
+    }
+    {
+        let mut group = c.benchmark_group("Galos 8 AES [4KiB] Encode");
+        rs_aes_encode_benchmark(&mut group, 4096, 4, 4);
+    }
+    {
+        let mut group = c.benchmark_group("Galos 8 AES [8KiB] Encode");
+        rs_aes_encode_benchmark(&mut group, 8192, 4, 4);
+    }
+    {
+        let mut group = c.benchmark_group("Galos 8 AES [16KiB] Encode");
+        rs_aes_encode_benchmark(&mut group, 16384, 4, 4);
+    }
+}
+
 fn reconstruct_one(c: &mut Criterion) {
     {
         let mut group = c.benchmark_group("Galos 8 [1KiB] Reconstruct One");
@@ -145,6 +229,36 @@ fn reconstruct_one(c: &mut Criterion) {
     {
         let mut group = c.benchmark_group("Galos 8 [16KiB] Reconstruct One");
         rs_reconstruct_benchmark(&mut group, 16384, 4, 4, 1);
+    }
+}
+
+fn reconstruct_aes_one(c: &mut Criterion) {
+    {
+        let mut group = c.benchmark_group("Galos 8 AES [1KiB] Reconstruct One");
+        rs_aes_reconstruct_benchmark(&mut group, 1024, 4, 4, 1);
+        rs_aes_reconstruct_benchmark(&mut group, 1024, 8, 8, 1);
+        rs_aes_reconstruct_benchmark(&mut group, 1024, 16, 16, 1);
+        rs_aes_reconstruct_benchmark(&mut group, 1024, 32, 32, 1);
+        rs_aes_reconstruct_benchmark(&mut group, 1024, 64, 64, 1);
+        rs_aes_reconstruct_benchmark(&mut group, 1024, 5, 2, 1);
+        rs_aes_reconstruct_benchmark(&mut group, 1024, 10, 4, 1);
+        rs_aes_reconstruct_benchmark(&mut group, 1024, 50, 20, 1);
+    }
+    {
+        let mut group = c.benchmark_group("Galos 8 AES [2KiB] Reconstruct One");
+        rs_aes_reconstruct_benchmark(&mut group, 2048, 4, 4, 1);
+    }
+    {
+        let mut group = c.benchmark_group("Galos 8 AES [4KiB] Reconstruct One");
+        rs_aes_reconstruct_benchmark(&mut group, 4096, 4, 4, 1);
+    }
+    {
+        let mut group = c.benchmark_group("Galos 8 AES [8KiB] Reconstruct One");
+        rs_aes_reconstruct_benchmark(&mut group, 8192, 4, 4, 1);
+    }
+    {
+        let mut group = c.benchmark_group("Galos 8 AES [16KiB] Reconstruct One");
+        rs_aes_reconstruct_benchmark(&mut group, 16384, 4, 4, 1);
     }
 }
 
@@ -195,7 +309,9 @@ fn reconstruct_none(c: &mut Criterion) {
 criterion_group!(
     benches,
     encode,
+    encode_aes,
     reconstruct_one,
+    reconstruct_aes_one,
     reconstruct_all,
     reconstruct_none
 );
