@@ -1,5 +1,5 @@
 #[cfg(all(feature = "avx512-gfni", target_arch = "x86_64"))]
-use core::arch::x86_64;
+use core::arch::x86_64::{self, __m512i};
 
 include!(concat!(env!("OUT_DIR"), "/table_aes.rs"));
 
@@ -350,14 +350,10 @@ pub fn mul_slice_xor(c: u8, input: &[u8], out: &mut [u8]) {
 #[target_feature(enable = "avx512f,avx512bw,gfni")]
 pub fn mul_slice(c: u8, input: &[u8], out: &mut [u8]) {
     let shard_len = input.len();
-    let num_chunks = shard_len / 64;
-    // don't handle any tail for performance and assume multiples of 64 bytes
-    assert_eq!(
-        shard_len % 64,
-        0,
-        "Shard length must be a multiple of 64 bytes"
-    );
     assert_eq!(shard_len, out.len());
+    let num_chunks = shard_len / 64;
+    let tail_len = shard_len % 64;
+    let tail_offset = num_chunks * 64;
 
     let vcoeff = x86_64::_mm512_set1_epi8(c as i8);
     for chunk in 0..num_chunks {
@@ -372,20 +368,27 @@ pub fn mul_slice(c: u8, input: &[u8], out: &mut [u8]) {
         // store back
         unsafe { x86_64::_mm512_storeu_si512(out.as_mut_ptr().add(offset) as *mut _, prod) };
     }
+
+    if tail_len > 0 {
+        unsafe {
+            gf_mul_masked(
+                input.as_ptr().add(tail_offset) as *const _,
+                out.as_mut_ptr().add(tail_offset) as *mut _,
+                vcoeff,
+                tail_len,
+            );
+        }
+    }
 }
 
 #[cfg(all(feature = "avx512-gfni", target_arch = "x86_64"))]
 #[target_feature(enable = "avx512f,avx512bw,gfni")]
 pub fn mul_slice_xor(c: u8, input: &[u8], out: &mut [u8]) {
     let shard_len = input.len();
-    let num_chunks = shard_len / 64;
-    // don't handle any tail for performance and assume multiples of 64 bytes
-    assert_eq!(
-        shard_len % 64,
-        0,
-        "Shard length must be a multiple of 64 bytes"
-    );
     assert_eq!(shard_len, out.len());
+    let num_chunks = shard_len / 64;
+    let tail_len = shard_len % 64;
+    let tail_offset = num_chunks * 64;
 
     let vcoeff = x86_64::_mm512_set1_epi8(c as i8);
     for chunk in 0..num_chunks {
@@ -406,6 +409,43 @@ pub fn mul_slice_xor(c: u8, input: &[u8], out: &mut [u8]) {
         // store back
         unsafe { x86_64::_mm512_storeu_si512(out.as_mut_ptr().add(offset) as *mut _, sum) };
     }
+
+    if tail_len > 0 {
+        unsafe {
+            gf_mul_masked_xor(
+                input.as_ptr().add(tail_offset) as *const _,
+                out.as_mut_ptr().add(tail_offset) as *mut _,
+                vcoeff,
+                tail_len,
+            );
+        }
+    }
+}
+
+/// Initial multiplication discarding the contents of `dst`.
+#[cfg(all(feature = "avx512-gfni", target_arch = "x86_64"))]
+#[target_feature(enable = "avx512f,avx512bw,gfni")]
+pub unsafe fn gf_mul_masked(src: *const i8, dst: *mut i8, coeff: __m512i, len: usize) {
+    let mask = ((1u64 << len) - 1) as x86_64::__mmask64;
+    let vsrc = unsafe { x86_64::_mm512_maskz_loadu_epi8(mask, src) };
+
+    let vprod = x86_64::_mm512_gf2p8mul_epi8(vsrc, coeff);
+
+    unsafe { x86_64::_mm512_mask_storeu_epi8(dst, mask, vprod) };
+}
+
+/// Follow-up multiplication building up on the contents of `dst`.
+#[cfg(all(feature = "avx512-gfni", target_arch = "x86_64"))]
+#[target_feature(enable = "avx512f,avx512bw,gfni")]
+pub unsafe fn gf_mul_masked_xor(src: *const i8, dst: *mut i8, coeff: __m512i, len: usize) {
+    let mask = ((1u64 << len) - 1) as x86_64::__mmask64;
+    let vsrc = unsafe { x86_64::_mm512_maskz_loadu_epi8(mask, src) };
+    let vdst = unsafe { x86_64::_mm512_maskz_loadu_epi8(mask, dst) };
+
+    let vprod = x86_64::_mm512_gf2p8mul_epi8(vsrc, coeff);
+    let vsum = x86_64::_mm512_xor_si512(vdst, vprod);
+
+    unsafe { x86_64::_mm512_mask_storeu_epi8(dst, mask, vsum) };
 }
 
 #[cfg(test)]
