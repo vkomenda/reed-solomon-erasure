@@ -5,8 +5,8 @@ extern crate alloc;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use super::{galois_8, Error, SBSError};
-use rand::{self, thread_rng, Rng};
+use super::{Error, SBSError, galois_8};
+use rand::{self, Rng, thread_rng};
 
 mod galois_16;
 
@@ -41,7 +41,7 @@ where
 
 pub fn fill_random<T>(arr: &mut [T])
 where
-    rand::distributions::Standard: rand::distributions::Distribution<T>,
+    rand::distr::StandardUniform: rand::distr::Distribution<T>,
 {
     for a in arr.iter_mut() {
         *a = rand::random::<T>();
@@ -1019,9 +1019,10 @@ fn test_verify_with_buffer_gives_correct_parity_shards() {
 
                 let mut buffer_refs = convert_2D_slices!(buffer =>to_mut_vec &mut [u8]);
 
-                assert!(!r
-                    .verify_with_buffer(&slice_copy_refs, &mut buffer_refs)
-                    .unwrap());
+                assert!(
+                    !r.verify_with_buffer(&slice_copy_refs, &mut buffer_refs)
+                        .unwrap()
+                );
             }
 
             for a in 0..3 {
