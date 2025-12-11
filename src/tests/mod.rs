@@ -6,7 +6,7 @@ use alloc::vec;
 use alloc::vec::Vec;
 
 use super::{Error, SBSError, galois_8};
-use rand::{self, Rng, thread_rng};
+use rand::{self, Rng, rng};
 
 mod galois_16;
 
@@ -117,10 +117,10 @@ fn test_too_many_shards() {
 
 #[test]
 fn test_shard_count() {
-    let mut rng = thread_rng();
+    let mut rng = rng();
     for _ in 0..10 {
-        let data_shard_count = rng.gen_range(1, 128);
-        let parity_shard_count = rng.gen_range(1, 128);
+        let data_shard_count = rng.random_range(1..128);
+        let parity_shard_count = rng.random_range(1..128);
 
         let total_shard_count = data_shard_count + parity_shard_count;
 
@@ -367,10 +367,10 @@ quickcheck! {
 
         let mut corrupt_pos_s = Vec::with_capacity(corrupt);
         for _ in 0..corrupt {
-            let mut pos = rand::random::<usize>() % (data + parity);
+            let mut pos: usize = rand::random::<u64>() as usize % (data + parity);
 
             while let Some(_) = corrupt_pos_s.iter().find(|&&x| x == pos) {
-                pos = rand::random::<usize>() % (data + parity);
+                pos = rand::random::<u64>() as usize % (data + parity);
             }
 
             corrupt_pos_s.push(pos);
@@ -442,10 +442,10 @@ quickcheck! {
 
         let mut corrupt_pos_s = Vec::with_capacity(corrupt);
         for _ in 0..corrupt {
-            let mut pos = rand::random::<usize>() % (data + parity);
+            let mut pos = rand::random::<u64>() as usize % (data + parity);
 
             while let Some(_) = corrupt_pos_s.iter().find(|&&x| x == pos) {
-                pos = rand::random::<usize>() % (data + parity);
+                pos = rand::random::<u64>() as usize % (data + parity);
             }
 
             corrupt_pos_s.push(pos);
@@ -491,10 +491,10 @@ quickcheck! {
 
         let mut corrupt_pos_s = Vec::with_capacity(corrupt);
         for _ in 0..corrupt {
-            let mut pos = rand::random::<usize>() % (data + parity);
+            let mut pos = rand::random::<u64>() as usize % (data + parity);
 
             while let Some(_) = corrupt_pos_s.iter().find(|&&x| x == pos) {
-                pos = rand::random::<usize>() % (data + parity);
+                pos = rand::random::<u64>() as usize % (data + parity);
             }
 
             corrupt_pos_s.push(pos);
@@ -554,10 +554,10 @@ quickcheck! {
 
         let mut corrupt_pos_s = Vec::with_capacity(corrupt);
         for _ in 0..corrupt {
-            let mut pos = rand::random::<usize>() % (data + parity);
+            let mut pos = rand::random::<u64>() as usize % (data + parity);
 
             while let Some(_) = corrupt_pos_s.iter().find(|&&x| x == pos) {
-                pos = rand::random::<usize>() % (data + parity);
+                pos = rand::random::<u64>() as usize % (data + parity);
             }
 
             corrupt_pos_s.push(pos);
@@ -763,8 +763,8 @@ quickcheck! {
             let mut parity_refs =
                 convert_2D_slices!(parity_shards =>to_mut_vec &mut [u8]);
 
-            for i in 0..data {
-                r.encode_single_sep(i, data_refs[i], &mut parity_refs).unwrap();
+            for (i, d) in data_refs.iter().enumerate() {
+                r.encode_single_sep(i, d, &mut parity_refs).unwrap();
             }
         }
 

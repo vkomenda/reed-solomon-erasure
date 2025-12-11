@@ -22,6 +22,7 @@ use super::Field;
 use super::ReconstructShard;
 
 const DECODE_MATRIX_CACHE_CAPACITY: usize = 254;
+const SHARD_COUNT_ON_STACK: usize = 32;
 
 // /// Parameters for parallelism.
 // #[derive(PartialEq, Debug, Clone, Copy)]
@@ -420,7 +421,7 @@ impl<F: Field> ReedSolomon<F> {
     //   - check consistency of length of individual slices
     //   - check length of `slice_present` matches length of `slices`
 
-    fn get_parity_rows(&self) -> SmallVec<[&[F::Elem]; 32]> {
+    fn get_parity_rows(&self) -> SmallVec<[&[F::Elem]; SHARD_COUNT_ON_STACK]> {
         let mut parity_rows = SmallVec::with_capacity(self.parity_shard_count);
         let matrix = &self.matrix;
         for i in self.data_shard_count..self.total_shard_count {
@@ -639,7 +640,7 @@ impl<F: Field> ReedSolomon<F> {
 
         let slice_len = slices[0].as_ref().len();
 
-        let mut buffer: SmallVec<[Vec<F::Elem>; 32]> =
+        let mut buffer: SmallVec<[Vec<F::Elem>; SHARD_COUNT_ON_STACK]> =
             SmallVec::with_capacity(self.parity_shard_count);
 
         for _ in 0..self.parity_shard_count {
@@ -749,7 +750,7 @@ impl<F: Field> ReedSolomon<F> {
     fn reconstruct_internal<T: ReconstructShard<F>>(
         &self,
         shards: &mut [T],
-        data_only: bool, // FIXME
+        data_only: bool,
     ) -> Result<(), Error> {
         check_piece_count!(all => self, shards);
 
@@ -802,41 +803,42 @@ impl<F: Field> ReedSolomon<F> {
         // as the data decode matrix is a N x N matrix, thus needs
         // N valid indices for determining the N rows to pick from
         // `self.matrix`.
-        let mut valid_shards: SmallVec<[&[F::Elem]; 32]> =
+        let mut valid_shards: SmallVec<[&[F::Elem]; SHARD_COUNT_ON_STACK]> =
             SmallVec::with_capacity(self.data_shard_count);
-        let mut valid_indices: SmallVec<[usize; 32]> =
+        let mut valid_indices: SmallVec<[usize; SHARD_COUNT_ON_STACK]> =
             SmallVec::with_capacity(self.data_shard_count);
         // the complement of valid_indices
-        let mut missing_indices: SmallVec<[usize; 32]> =
+        let mut missing_indices: SmallVec<[usize; SHARD_COUNT_ON_STACK]> =
             SmallVec::with_capacity(self.parity_shard_count);
         // content of the output shards
-        let mut reconstruct_shards: SmallVec<[&mut [F::Elem]; 32]> =
+        let mut reconstruct_shards: SmallVec<[&mut [F::Elem]; SHARD_COUNT_ON_STACK]> =
             SmallVec::with_capacity(self.parity_shard_count);
         // reconstruct_indices indexes missing_indices
-        let mut reconstruct_indices: SmallVec<[usize; 32]> =
+        let mut reconstruct_indices: SmallVec<[usize; SHARD_COUNT_ON_STACK]> =
             SmallVec::with_capacity(self.parity_shard_count);
 
-        // Separate the shards into groups
-        for (matrix_row, shard) in shards.iter_mut().enumerate() {
+        for (shard_idx, shard) in shards.iter_mut().enumerate() {
             match shard.get_or_initialize(shard_len) {
                 Ok(shard) => {
                     if valid_shards.len() < self.data_shard_count {
                         valid_shards.push(shard);
-                        valid_indices.push(matrix_row);
+                        valid_indices.push(shard_idx);
                     } else {
-                        missing_indices.push(matrix_row);
+                        missing_indices.push(shard_idx);
                     }
                 }
                 Err(Err(_)) => {
                     // the shard data is not meant to be initialized here,
                     // but we should still note it missing.
-                    missing_indices.push(matrix_row);
+                    missing_indices.push(shard_idx);
                 }
                 Err(Ok(shard)) => {
-                    reconstruct_shards.push(shard);
-                    // Reconstruction shard indices are relative to the missing indices array.
-                    reconstruct_indices.push(missing_indices.len());
-                    missing_indices.push(matrix_row);
+                    if !data_only || shard_idx < self.data_shard_count {
+                        reconstruct_shards.push(shard);
+                        // Reconstruction shard indices are relative to the missing indices array.
+                        reconstruct_indices.push(missing_indices.len());
+                    }
+                    missing_indices.push(shard_idx);
                 }
             }
         }
@@ -844,10 +846,11 @@ impl<F: Field> ReedSolomon<F> {
         let decode_matrix = self.get_decode_matrix(&valid_indices, &missing_indices);
 
         // Decode coefficient matrix to recover the desired shards, data and parity alike
-        let reconstruct_decode_rows: SmallVec<[&[F::Elem]; 32]> = reconstruct_indices
-            .iter()
-            .map(|i| decode_matrix.get_row(*i))
-            .collect();
+        let reconstruct_decode_rows: SmallVec<[&[F::Elem]; SHARD_COUNT_ON_STACK]> =
+            reconstruct_indices
+                .iter()
+                .map(|i| decode_matrix.get_row(*i))
+                .collect();
 
         self.code_some_slices(
             &reconstruct_decode_rows,
