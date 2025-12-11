@@ -84,7 +84,9 @@ impl<'a, F: Field> SubmatrixMut<'a, F> {
         left[first].swap_with_slice(right[0]);
     }
 
-    /// In-place Gaussian elimination.
+    /// In-place Gaussian elimination. The result needs to be stored in a Matrix because the
+    /// permutation of rows is only local to the `SubmatrixMut` and is not carried over to the
+    /// `Matrix` it refers to.
     fn gaussian_elim(&mut self) -> Result<(), Error> {
         for i in 0..self.row_count {
             // Find pivot
@@ -99,7 +101,7 @@ impl<'a, F: Field> SubmatrixMut<'a, F> {
 
             // Swap to top
             if pivot_row != i {
-                self.swap_rows(i, pivot_row);
+                self.rows.swap(i, pivot_row);
             }
 
             // Scale pivot to 1
@@ -121,10 +123,27 @@ impl<'a, F: Field> SubmatrixMut<'a, F> {
         }
         Ok(())
     }
+
+    /// Collect a submatrix into an owned `Matrix`.
+    fn collect_submatrix<R, C>(&self, row_range: R, col_range: C) -> Matrix<F>
+    where
+        R: std::ops::RangeBounds<usize>,
+        C: std::ops::RangeBounds<usize>,
+    {
+        let b = MatrixBounds::new(row_range, col_range, self.row_count, self.col_count);
+
+        let mut m = Matrix::new(b.row_count, b.col_count);
+        for (r, i) in (b.row_start..b.row_end).zip(0..) {
+            for (c, j) in (b.col_start..b.col_end).zip(0..) {
+                m.set(i, j, self.rows[r][c]);
+            }
+        }
+
+        m
+    }
 }
 
 impl<F: Field> Matrix<F> {
-    // TODO: rename to `zero` since this in effect outputs a zero matrix.
     pub fn new(row_count: usize, col_count: usize) -> Self {
         let data = SmallVec::from_vec(vec![F::zero(); row_count * col_count]);
 
@@ -251,7 +270,7 @@ impl<F: Field> Matrix<F> {
         R: std::ops::RangeBounds<usize>,
         C: std::ops::RangeBounds<usize>,
     {
-        let b = self.matrix_bounds(row_range, col_range);
+        let b = MatrixBounds::new(row_range, col_range, self.row_count, self.col_count);
 
         let mut m = Matrix::new(b.row_count, b.col_count);
         for (r, i) in (b.row_start..b.row_end).zip(0..) {
@@ -268,7 +287,7 @@ impl<F: Field> Matrix<F> {
         R: std::ops::RangeBounds<usize>,
         C: std::ops::RangeBounds<usize>,
     {
-        let b = self.matrix_bounds(row_range, col_range);
+        let b = MatrixBounds::new(row_range, col_range, self.row_count, self.col_count);
         let base_ptr = self.data.as_mut_ptr();
 
         let rows: RowMutArr<'a, F::Elem> = (b.row_start..b.row_end)
@@ -283,10 +302,6 @@ impl<F: Field> Matrix<F> {
 
     pub fn rows<'a>(&'a self) -> RowRefArr<'a, F::Elem> {
         self.data.chunks(self.col_count).collect()
-    }
-
-    pub fn rows_mut<'a>(&'a mut self) -> RowMutArr<'a, F::Elem> {
-        self.data.chunks_mut(self.col_count).collect()
     }
 
     pub fn get_row(&self, row: usize) -> &[F::Elem] {
@@ -304,12 +319,12 @@ impl<F: Field> Matrix<F> {
         assert!(self.is_square(), "Trying to invert a non-square matrix");
 
         let mut aug = self.augment_with_identity();
-        {
-            let mut aug_rows = aug.submatrix_mut(.., ..);
-            aug_rows.gaussian_elim()?;
-        }
-
-        Ok(aug.submatrix(0..aug.row_count, aug.row_count..aug.col_count))
+        let mut aug_rows = aug.submatrix_mut(.., ..);
+        aug_rows.gaussian_elim()?;
+        Ok(aug_rows.collect_submatrix(
+            0..aug_rows.row_count,
+            aug_rows.row_count..aug_rows.col_count,
+        ))
     }
 
     pub fn encode_coeffs(data_shards: usize, total_shards: usize) -> Self {
@@ -324,8 +339,24 @@ impl<F: Field> Matrix<F> {
         }
         mat
     }
+}
 
-    fn matrix_bounds<R, C>(&self, row_range: R, col_range: C) -> MatrixBounds
+struct MatrixBounds {
+    row_count: usize,
+    col_count: usize,
+    row_start: usize,
+    row_end: usize,
+    col_start: usize,
+    col_end: usize,
+}
+
+impl MatrixBounds {
+    fn new<R, C>(
+        row_range: R,
+        col_range: C,
+        parent_row_count: usize,
+        parent_col_count: usize,
+    ) -> MatrixBounds
     where
         R: std::ops::RangeBounds<usize>,
         C: std::ops::RangeBounds<usize>,
@@ -340,7 +371,7 @@ impl<F: Field> Matrix<F> {
         let row_end = match row_range.end_bound() {
             Included(&x) => x + 1,
             Excluded(&x) => x,
-            Unbounded => self.row_count,
+            Unbounded => parent_row_count,
         };
 
         let col_start = match col_range.start_bound() {
@@ -351,7 +382,7 @@ impl<F: Field> Matrix<F> {
         let col_end = match col_range.end_bound() {
             Included(&x) => x + 1,
             Excluded(&x) => x,
-            Unbounded => self.col_count,
+            Unbounded => parent_col_count,
         };
 
         let row_count = row_end - row_start;
@@ -366,15 +397,6 @@ impl<F: Field> Matrix<F> {
             col_end,
         }
     }
-}
-
-struct MatrixBounds {
-    row_count: usize,
-    col_count: usize,
-    row_start: usize,
-    row_end: usize,
-    col_start: usize,
-    col_end: usize,
 }
 
 #[cfg(test)]
