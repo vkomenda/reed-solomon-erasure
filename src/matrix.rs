@@ -61,11 +61,11 @@ impl<'a, F: Field> SubmatrixMut<'a, F> {
     /// Write the Vandermonde matrix into the rows.
     fn make_vandermonde(&mut self) {
         for (i, row) in self.rows.iter_mut().enumerate() {
-            // FIXME: row_gen should be non-0 and unique, such as in
-            // let row_gen = F::exp(F::generator(), i + 1);
+            let row_gen = F::exp(F::generator(), i + 1);
+            // FIXME: row_gen should be non-0 and unique, such as above.
             // Below is the crate v6.0 behaviour that leads to row_gen(0) == 0
             // and the first row being all ones.
-            let row_gen = F::nth(i);
+            // let row_gen = F::nth(i);
             for (j, a) in row.iter_mut().enumerate() {
                 *a = F::exp(row_gen, j);
             }

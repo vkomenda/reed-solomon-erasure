@@ -830,7 +830,13 @@ impl<F: Field> ReedSolomon<F> {
             SmallVec::with_capacity(self.parity_shard_count);
 
         for (shard_idx, shard) in shards.iter_mut().enumerate() {
-            match shard.get_or_initialize(shard_len) {
+            let shard_data = if data_only && shard_idx >= self.data_shard_count {
+                shard.get().ok_or(None)
+            } else {
+                shard.get_or_initialize(shard_len).map_err(Some)
+            };
+
+            match shard_data {
                 Ok(shard) => {
                     if valid_shards.len() < self.data_shard_count {
                         valid_shards.push(shard);
@@ -839,12 +845,13 @@ impl<F: Field> ReedSolomon<F> {
                         missing_indices.push(shard_idx);
                     }
                 }
-                Err(Err(_)) => {
+                Err(None) => {
                     // the shard data is not meant to be initialized here,
                     // but we should still note it missing.
                     missing_indices.push(shard_idx);
                 }
-                Err(Ok(shard)) => {
+                Err(Some(x)) => {
+                    let shard = x?;
                     if !data_only || shard_idx < self.data_shard_count {
                         reconstruct_shards.push(shard);
                         // Reconstruction shard indices are relative to the missing indices array.
