@@ -721,8 +721,8 @@ impl<F: Field> ReedSolomon<F> {
     /// coefficient rows that encode available and missing shards respectively. Lastly, the returned
     /// reconstruction coefficients are calculated as $C = G_m \cdot G_v^{-1}$.
     ///
-    /// G is stored in the cache at the key `valid_indices`. This key is sufficient because it implies
-    /// the other dimension of $G$, that is `missing_indices`.
+    /// G is stored in the cache at the key `missing_indices`. This key is sufficient because it implies
+    /// the other dimension of $C$, that is `valid_indices`.
     fn get_decode_matrix(
         &self,
         valid_indices: &[usize],
@@ -730,7 +730,7 @@ impl<F: Field> ReedSolomon<F> {
     ) -> Arc<Matrix<F>> {
         {
             let mut cache = self.decode_matrix_cache.lock();
-            if let Some(entry) = cache.get(valid_indices) {
+            if let Some(entry) = cache.get(missing_indices) {
                 return entry.clone();
             }
         }
@@ -754,7 +754,7 @@ impl<F: Field> ReedSolomon<F> {
         {
             let decode_coeffs = decode_coeffs.clone();
             let mut cache = self.decode_matrix_cache.lock();
-            cache.put(Vec::from(valid_indices), decode_coeffs);
+            cache.put(Vec::from(missing_indices), decode_coeffs);
         }
         decode_coeffs
     }
@@ -808,7 +808,7 @@ impl<F: Field> ReedSolomon<F> {
         // Also, create an array of indices of the valid rows we do have
         // and the missing rows.
         //
-        // The valid indices are used to construct the data decode matrix,
+        // The missing indices are used to construct the data decode matrix,
         // and as key in the data decode matrix cache.
         //
         // We need exactly N valid indices, where N = `data_shard_count`,
