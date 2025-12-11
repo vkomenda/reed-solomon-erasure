@@ -484,8 +484,20 @@ impl<F: Field> ReedSolomon<F> {
         inputs: &[T],
         outputs: &mut [U],
     ) {
-        for i_input in 0..self.data_shard_count {
-            self.code_single_slice(matrix_rows, i_input, inputs[i_input].as_ref(), outputs);
+        for (i, out) in outputs.iter_mut().enumerate() {
+            let out = out.as_mut();
+
+            // Initialize the parity row `i`. Do that outside the loop below to avoid a conditional jump.
+            let coeff0 = matrix_rows[i][0];
+            let inp0 = inputs[0].as_ref();
+            F::mul_slice(coeff0, inp0, out);
+
+            // Sum up further codes on the same row `i`. Note that `j` is 0-based.
+            for (j, inp) in inputs[1..].iter().enumerate() {
+                let coeff = matrix_rows[i][j + 1];
+                let inp = inp.as_ref();
+                F::mul_slice_add(coeff, inp, out);
+            }
         }
     }
 
