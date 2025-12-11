@@ -74,14 +74,20 @@ impl<'a, F: Field> SubmatrixMut<'a, F> {
 
     /// Swap rows in place.
     fn swap_rows(&mut self, row1: usize, row2: usize) {
-        let (first, second) = if row1 < row2 {
-            (row1, row2)
-        } else {
-            (row2, row1)
-        };
+        for j in 0..self.col_count {
+            let tmp = self.rows[row1][j];
+            self.rows[row1][j] = self.rows[row2][j];
+            self.rows[row2][j] = tmp;
+        }
 
-        let (left, right) = self.rows.split_at_mut(second);
-        left[first].swap_with_slice(right[0]);
+        // Below is an approach which may be faster for rows with hundreds of elements or more.
+        // let (first, second) = if row1 < row2 {
+        //     (row1, row2)
+        // } else {
+        //     (row2, row1)
+        // };
+        // let (left, right) = self.rows.split_at_mut(second);
+        // left[first].swap_with_slice(right[0]);
     }
 
     /// In-place Gaussian elimination.
