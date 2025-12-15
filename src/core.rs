@@ -492,9 +492,9 @@ impl<F: Field> ReedSolomon<F> {
             let inp0 = inputs[0].as_ref();
             F::mul_slice(coeff0, inp0, out);
 
-            // Sum up further codes on the same row `i`. Note that `j` is 0-based.
-            for (j, inp) in inputs[1..].iter().enumerate() {
-                let coeff = matrix_rows[i][j + 1];
+            // Sum up further codes on the same row `i`.
+            for (j, inp) in (1..).zip(inputs[1..].iter()) {
+                let coeff = matrix_rows[i][j];
                 let inp = inp.as_ref();
                 F::mul_slice_add(coeff, inp, out);
             }
@@ -716,13 +716,13 @@ impl<F: Field> ReedSolomon<F> {
     /// Returns an `self.data_shard_count` by `self.parity_shard_count` matrix with multiplicative
     /// coefficients to decode the missing rows.
     ///
-    /// The function computes the generator matrix $G = [I; E]$ where $E$ is the encode coefficients and $I$
-    /// is the identity matrix of the suitable size. Then, it splits $G$ row-wise into $G_v$ and $G_m$ - the
-    /// coefficient rows that encode available and missing shards respectively. Lastly, the returned
-    /// reconstruction coefficients are calculated as $C = G_m \cdot G_v^{-1}$.
+    /// The function splits the systematic generator matrix $G = [I; E]$ (where $E$ is the encode
+    /// coefficient matrix and $I$ is the identity matrix of suitable size) row-wise into $G_v$ and
+    /// $G_m$ - the coefficient rows that encode available and missing shards respectively. It
+    /// returns the the reconstruction coefficients as $C = G_m \cdot G_v^{-1}$.
     ///
-    /// G is stored in the cache at the key `missing_indices`. This key is sufficient because it implies
-    /// the other dimension of $C$, that is `valid_indices`.
+    /// $C$ is stored in the cache at the key `missing_indices`. This key is sufficient because it
+    /// implies the other dimension of $C$, that is `valid_indices`.
     fn get_decode_matrix(
         &self,
         valid_indices: &[usize],

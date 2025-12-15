@@ -53,7 +53,7 @@ fn log2(n: f32) -> f32 {
 }
 
 /// A finite field to perform encoding over.
-pub trait Field: Sized {
+pub trait Field: Sized + std::fmt::Debug {
     /// The order of the field. This is a limit on the number of shards
     /// in an encoding.
     const ORDER: usize;

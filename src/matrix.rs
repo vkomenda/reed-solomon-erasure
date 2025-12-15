@@ -49,29 +49,6 @@ impl<'a, F: Field> SubmatrixMut<'a, F> {
         }
     }
 
-    /// Write the identity matrix into the rows.
-    fn make_identity(&mut self) {
-        for (i, row) in self.rows.iter_mut().enumerate() {
-            for (j, a) in row.iter_mut().enumerate() {
-                *a = if i == j { F::one() } else { F::zero() }
-            }
-        }
-    }
-
-    /// Write the Vandermonde matrix into the rows.
-    fn make_vandermonde(&mut self) {
-        for (i, row) in self.rows.iter_mut().enumerate() {
-            let row_gen = F::exp(F::generator(), i + 1);
-            // FIXME: row_gen should be non-0 and unique, such as above.
-            // Below is the crate v6.0 behaviour that leads to row_gen(0) == 0
-            // and the first row being all ones.
-            // let row_gen = F::nth(i);
-            for (j, a) in row.iter_mut().enumerate() {
-                *a = F::exp(row_gen, j);
-            }
-        }
-    }
-
     /// Swap rows in place.
     fn swap_rows(&mut self, row1: usize, row2: usize) {
         let (first, second) = if row1 < row2 {
@@ -185,6 +162,39 @@ impl<F: Field> Matrix<F> {
         Self::new_with_data(&vec)
     }
 
+    /// Write rows `[row_offset..]` of a Vandermonde matrix into the result. Here, `row_offset`
+    /// allows to do construct submatrices of a Vandermonde matrix on which to do targeted linear
+    /// algebra.
+    fn vandermonde(row_count: usize, col_count: usize, row_offset: usize) -> Self {
+        let mut mat = Matrix::new(row_count, col_count);
+
+        for (i, row) in mat.rows_mut().iter_mut().enumerate() {
+            // let row_gen = F::exp(F::generator(), i + 1);
+            //
+            // row_gen should be non-0 and unique, such as above. Below is the crate v6.0 behaviour
+            // that only works, that is row_gen(0) != 0, because in that case row_offset ==
+            // self.col_count != 0.
+            let row_gen = F::nth(i + row_offset);
+            for (j, a) in row.iter_mut().enumerate() {
+                *a = F::exp(row_gen, j);
+            }
+        }
+
+        mat
+    }
+
+    /// Construct the systematic generator matrix $G = [I | E]$ where $E$ is the parity encoder
+    /// coefficient matrix.
+    fn systematic_generator(e: Matrix<F>) -> Self {
+        let col_count = e.col_count;
+        let mut result = Self::new(col_count + e.row_count, col_count);
+        for i in 0..col_count {
+            result.set(i, i, F::one());
+        }
+        result.data[col_count * col_count..].copy_from_slice(&e.data);
+        result
+    }
+
     #[cfg(test)]
     pub fn identity(size: usize) -> Self {
         let mut result = Self::new(size, size);
@@ -242,20 +252,19 @@ impl<F: Field> Matrix<F> {
             }
             aug.set(i, n + i, F::one()); // identity
         }
-
         aug
     }
 
     fn submatrix<R, C>(&self, row_range: R, col_range: C) -> Self
     where
-        R: std::ops::RangeBounds<usize>,
-        C: std::ops::RangeBounds<usize>,
+        R: core::ops::RangeBounds<usize>,
+        C: core::ops::RangeBounds<usize>,
     {
         let b = self.matrix_bounds(row_range, col_range);
 
         let mut m = Matrix::new(b.row_count, b.col_count);
-        for (r, i) in (b.row_start..b.row_end).zip(0..) {
-            for (c, j) in (b.col_start..b.col_end).zip(0..) {
+        for (i, r) in (b.row_start..b.row_end).enumerate() {
+            for (j, c) in (b.col_start..b.col_end).enumerate() {
                 m.set(i, j, self.get(r, c));
             }
         }
@@ -265,8 +274,8 @@ impl<F: Field> Matrix<F> {
 
     fn submatrix_mut<'a, R, C>(&'a mut self, row_range: R, col_range: C) -> SubmatrixMut<'a, F>
     where
-        R: std::ops::RangeBounds<usize>,
-        C: std::ops::RangeBounds<usize>,
+        R: core::ops::RangeBounds<usize>,
+        C: core::ops::RangeBounds<usize>,
     {
         let b = self.matrix_bounds(row_range, col_range);
         let base_ptr = self.data.as_mut_ptr();
@@ -274,7 +283,7 @@ impl<F: Field> Matrix<F> {
         let rows: RowMutArr<'a, F::Elem> = (b.row_start..b.row_end)
             .map(|i| unsafe {
                 let row_ptr = base_ptr.add(i * self.col_count + b.col_start);
-                std::slice::from_raw_parts_mut(row_ptr, b.col_count)
+                core::slice::from_raw_parts_mut(row_ptr, b.col_count)
             })
             .collect();
 
@@ -312,25 +321,23 @@ impl<F: Field> Matrix<F> {
         Ok(aug.submatrix(0..aug.row_count, aug.row_count..aug.col_count))
     }
 
+    fn parity_encode_coeffs(data_shards: usize, total_shards: usize) -> Self {
+        let v0 = Matrix::vandermonde(data_shards, data_shards, 0);
+        let v1 = Matrix::vandermonde(total_shards - data_shards, data_shards, data_shards);
+        v1.multiply(&v0.invert().unwrap())
+    }
+
     pub fn encode_coeffs(data_shards: usize, total_shards: usize) -> Self {
-        let mut mat = Self::new(total_shards, data_shards);
-        {
-            let mut top_square = mat.submatrix_mut(0..data_shards, 0..data_shards);
-            top_square.make_identity();
-        }
-        {
-            let mut bottom_mat = mat.submatrix_mut(data_shards..total_shards, 0..data_shards);
-            bottom_mat.make_vandermonde();
-        }
-        mat
+        let parity_encode_coeffs = Matrix::parity_encode_coeffs(data_shards, total_shards);
+        Matrix::systematic_generator(parity_encode_coeffs)
     }
 
     fn matrix_bounds<R, C>(&self, row_range: R, col_range: C) -> MatrixBounds
     where
-        R: std::ops::RangeBounds<usize>,
-        C: std::ops::RangeBounds<usize>,
+        R: core::ops::RangeBounds<usize>,
+        C: core::ops::RangeBounds<usize>,
     {
-        use std::ops::Bound::*;
+        use core::ops::Bound::*;
 
         let row_start = match row_range.start_bound() {
             Included(&x) => x,
@@ -368,6 +375,7 @@ impl<F: Field> Matrix<F> {
     }
 }
 
+#[derive(Copy, Clone, Debug)]
 struct MatrixBounds {
     row_count: usize,
     col_count: usize,
